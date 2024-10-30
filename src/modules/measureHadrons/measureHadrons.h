@@ -12,7 +12,7 @@ enum source_type {
     POINT
 };
 enum action_type {
-    HISQ
+    HISQ , stdStag
 };
 enum correlator_axis{
     x_axis, y_axis, z_axis, t_axis
@@ -23,7 +23,8 @@ static std::map<std::string, source_type> source_type_map = {
         {std::string("POINT"), POINT}
 };
 static std::map<std::string, action_type> action_type_map = {
-        {std::string("HISQ"), HISQ}
+        {std::string("HISQ"), HISQ},
+        {std::string("stdStag"), stdStag}
 };
 static std::map<std::string, correlator_axis> correlator_axis_map = {
         {std::string("x"), x_axis},
@@ -39,6 +40,7 @@ struct measureHadronsParam : LatticeParameters {
     Parameter<std::string> source_type; //FIXME this feature isn't implemented yet
 
     DynamicParameter<std::string> correlator_axes;
+    DynamicParameter<int> abs_momenta_per_correlator_axis;
     Parameter<std::string> measurements_dir;
     DynamicParameter<floatT> masses;
     DynamicParameter<std::string> mass_labels;
@@ -64,6 +66,7 @@ struct measureHadronsParam : LatticeParameters {
         add(source_type, "source_type");
         add(source_coords, "source_coords");
         add(correlator_axes, "correlator_axes");
+        add(abs_momenta_per_correlator_axis, "abs_momenta_per_correlator_axis");
 
         addDefault(cg_residue, "cg_residue", static_cast<floatT>(1e-6));
         addDefault(cg_max_iter, "cg_max_iter", static_cast<int>(10000));
@@ -110,12 +113,12 @@ struct measureHadronsParam : LatticeParameters {
 };
 
 
-template<class floatT, bool onDevice, size_t HaloDepth, size_t HaloDepthSpin, Layout Source,  size_t NStacks, CompressionType comp>
+template<class floatT, bool onDevice, size_t HaloDepth, size_t HaloDepthSpin, Layout Source,  size_t NStacks, CompressionType compHISQ , CompressionType compstdStag>
 class measureHadrons {
 
 private:
 
-    Gaugefield<floatT, onDevice, HaloDepth, R18>& _gauge;
+    //Gaugefield<floatT, onDevice, HaloDepth, R18>& _gauge;
     CommunicationBase& _commBase;
     measureHadronsParam<floatT>& _lp;
 
@@ -123,7 +126,9 @@ private:
     const size_t _n_masses;
     const size_t _n_channels = 8;
     const size_t _n_correlator_axes;
+    const size_t _n_abs_momenta_per_axis;
     size_t _n_correlator_elements ;
+    size_t _n_momenta_elements ;
     const source_type _src_type; //FIXME support for different sources
     const action_type _act_type; //FIXME support for wilson,clover fermions
 
@@ -136,9 +141,13 @@ private:
 
     const size_t _vol4;
     std::array<size_t,4> _lat_extents; // "lx, ly, lz, lt"
+    std::array<size_t,4> _global_lat_extents; // "LX, LY, LZ, LT"
     std::array<size_t,4> _tmp_axis_indices;
     std::vector<size_t> _axes_indices; // later of size 4*_n_correlator_axes where [4*_n_correlator_axes + 0] is corr axis, 4*_n_correlator_axes + (1 to 3)] are not corr axis
     std::vector<size_t> _corr_axes_start_index ;
+    std::vector<size_t> _momenta_start_index ;
+    std::vector<size_t> _momentum_elements_per_axis ;
+    std::vector<size_t> _momenta ;
 
     std::vector<size_t> _corr_ls ;
 
@@ -148,16 +157,24 @@ private:
     std::vector<LatticeContainer<false,GPUcomplex<floatT>>> _contracted_propagators;
 
     //! In the end this contains the values of the correlator at each z for each mass combination and channel
-    //! Memory layout of this vector: see constructor and corr_index()
+    //! memory layout of this vector: see constructor and corr_index()
     std::vector<GPUcomplex<floatT>> _correlators;
+    template <const size_t n_color> 
+    void setup_memory_StaggeredType(std::vector<Spinorfield<floatT,false,All,0,n_color>> & prop_containers) ;
+    template <class StaggeredTypeAction , const size_t n_color>
+    void invert_StaggeredType_Dslash(StaggeredTypeAction & dslash , size_t massIndex , floatT mass , std::vector<Spinorfield<floatT,false,All,0,n_color>> & prop_containers) ;
+    void compute_StaggeredType_correlator() ;
+    template <const size_t n_color>
+    void contract_prop_containers(std::vector<Spinorfield<floatT,false,All,0,n_color>> & prop_containers) ;
 
 public:
 
-    explicit measureHadrons(CommunicationBase& commBase, measureHadronsParam<floatT>& lp, Gaugefield<floatT,onDevice,HaloDepth,comp>& gauge) :
+    explicit measureHadrons(CommunicationBase& commBase, measureHadronsParam<floatT>& lp ) : //, Gaugefield<floatT,onDevice,HaloDepth,comp>& gauge) :
             _commBase(commBase),
             _lp(lp),
             _n_masses(_lp.masses.get().size()),
             _n_correlator_axes(_lp.correlator_axes.get().size()),
+            _n_abs_momenta_per_axis(_lp.abs_momenta_per_correlator_axis.get().size()),
             _src_type(source_type_map[_lp.source_type()]),
             _act_type(action_type_map[_lp.action()]),
             _use_individual_naik_epsilons(lp.naik_epsilons_individual.isSet()),
@@ -171,7 +188,11 @@ public:
                           GIndexer<All,HaloDepth>::getLatData().ly,
                           GIndexer<All,HaloDepth>::getLatData().lz,
                           GIndexer<All,HaloDepth>::getLatData().lt}),
-            _gauge(gauge),
+            _global_lat_extents({GIndexer<All,HaloDepth>::getLatData().globLX,
+                                GIndexer<All,HaloDepth>::getLatData().globLY,
+                                GIndexer<All,HaloDepth>::getLatData().globLZ,
+                                GIndexer<All,HaloDepth>::getLatData().globLT}),
+            //_gauge(gauge),
             _current_source(lp.source_coords()[0], lp.source_coords()[1],lp.source_coords()[2],lp.source_coords()[3])
     {
         //! set up things which depend on _n_correlator_axes
@@ -180,8 +201,11 @@ public:
         std::fill(_axes_indices.begin(), _axes_indices.end(), 0);
  
         _corr_ls.resize(_n_correlator_axes);
+        _momentum_elements_per_axis.resize(_n_correlator_axes) ;
         _corr_axes_start_index.resize(_n_correlator_axes);
+        _momenta_start_index.resize(_n_correlator_axes) ;
         _n_correlator_elements = 0 ;
+        _n_momenta_elements    = 0 ;
         for (size_t i = 0; i < _n_correlator_axes; i++)
         {
             correlator_axis _tmp_corr_axis(correlator_axis_map[lp.correlator_axes.get()[i]]);
@@ -207,21 +231,32 @@ public:
             }
             
             _corr_ls[i] = _lat_extents[_axes_indices[ i * 4 ]] ;
-             
-            _n_correlator_elements += _n_masses * _n_masses * _corr_ls[i] * _n_channels;
+            _momentum_elements_per_axis[i] = ( _lp.abs_momenta_per_correlator_axis.get()[i] + 1 )
+                                        * ( _lp.abs_momenta_per_correlator_axis.get()[i] + 1 )
+                                        * ( _lp.abs_momenta_per_correlator_axis.get()[i] + 1 ) ;
+            _n_momenta_elements    +=  3 * _momentum_elements_per_axis[i] ;
+            _n_correlator_elements += _n_masses 
+                                    * _n_masses 
+                                    * _corr_ls[i] 
+                                    * _n_channels
+                                    * _momentum_elements_per_axis[i] ;
+            
             if ( i == 0)
             {
                 _corr_axes_start_index[i] = 0 ;
+                _momenta_start_index[i]   = 0 ;
             }
             else
             {
-                _corr_axes_start_index[i] = _n_masses * _n_masses * _corr_ls[i-1] * _n_channels ;
+                _corr_axes_start_index[i] = _n_masses * _n_masses * _corr_ls[i-1] * _n_channels
+                                          * _momentum_elements_per_axis[ i - 1 ];
+                _momenta_start_index[i]   = 3 * _momentum_elements_per_axis[ i - 1 ] ;
             }
             
             
         }
                 
-
+        
 
         //! set up _contracted_propagators
         for(size_t i = 0; i < _n_masses; i++) {
@@ -232,6 +267,36 @@ public:
                         "propmemA", "propmemB", "propmemC", "propmemD")));
                 _contracted_propagators.back().adjustSize(_vol4);
             }
+        }
+        
+        //! set up momenta vector
+        _momenta.resize(_n_momenta_elements);
+        std::fill(_momenta.begin(), _momenta.end(), 0);
+        for (size_t i = 0; i < _n_abs_momenta_per_axis ; i++)
+        {
+            size_t momentum_index = 0 ;
+            for (size_t k1 = 0; k1 <= _lp.abs_momenta_per_correlator_axis.get()[i] ; k1++)
+            {
+                for (size_t k2 = 0; k2 <= _lp.abs_momenta_per_correlator_axis.get()[i] ; k2++)
+                {
+                    for (size_t k3 = 0; k3 <= _lp.abs_momenta_per_correlator_axis.get()[i] ; k3++)
+                    {
+                    
+                    
+                        _momenta[_momenta_start_index[i] + 3 * momentum_index ]     = k1 ;
+                        _momenta[_momenta_start_index[i] + 3 * momentum_index + 1 ] = k2 ;
+                        _momenta[_momenta_start_index[i] + 3 * momentum_index + 2 ] = k3 ;
+
+                        momentum_index++ ;
+                    }
+                }
+            }
+        }
+        
+        rootLogger.info( _n_momenta_elements , " " , _momenta.size() )  ;
+        for (size_t i = 0; i < _n_momenta_elements ; i += 3)
+        {
+            rootLogger.info( _momenta[i] , _momenta[i + 1] , _momenta[i + 2] ) ;   
         }
         
 
@@ -272,16 +337,18 @@ public:
         _current_source.t = source[3];
     }
 
-    void compute_HISQ_correlators();
+    void compute_HISQ_correlators(Gaugefield<floatT,onDevice,HaloDepth,compHISQ>& gauge);
+    void compute_stdStag_correlators(Gaugefield<floatT,onDevice,HaloDepth,compstdStag>& gauge);
 
     void write_correlators_to_file();
 
 private:
-    [[nodiscard]] inline int corr_index(const int w, const int channel, const int mass_index , const int corr_axis_index) const{
+    [[nodiscard]] inline int corr_index(const int w, const int channel, const int mass_index , const int corr_axis_index , const int momentum_index ) const{
         //! Channels start at 1 but arrays at 0, so it's channel-1
         return _corr_axes_start_index[corr_axis_index] 
-                + mass_index * _n_channels * _corr_ls[corr_axis_index] 
-                + (channel - 1) * _corr_ls[corr_axis_index] 
+                + mass_index * _n_channels * _momentum_elements_per_axis[corr_axis_index]  * _corr_ls[corr_axis_index] 
+                + (channel - 1) * _momentum_elements_per_axis[corr_axis_index] * _corr_ls[corr_axis_index]   
+                + momentum_index * _corr_ls[corr_axis_index]
                 + w;
     }
 

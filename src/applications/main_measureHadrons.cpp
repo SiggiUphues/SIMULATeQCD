@@ -30,29 +30,59 @@ int main(int argc, char *argv[]) {
         const size_t HaloDepth = 2; //! reason: HISQ Dslash
         const size_t HaloDepthSpin = 4; //! reason: HISQ Dslash
         const size_t NStacks = 1; //TODO add support for multiple sources at the same time i.e. nstacks>1
-
+        const CompressionType compHISQ = R18 ;
+        const CompressionType compstdStag = R14 ;
+        
         initIndexer(HaloDepth, lp, commBase);
-
-        Gaugefield<PREC, USE_GPU, HaloDepth> gauge(commBase);
-        if (lp.use_unit_conf()){
-            rootLogger.info("Using unit configuration for tests/benchmarks");
-            gauge.one();
-        } else {
-            rootLogger.info("Read configuration");
-            gauge.readconf_nersc(lp.GaugefileName());
-        }
-        gauge.updateAll();
-
-        //! Check plaquette
-        GaugeAction<PREC, USE_GPU, HaloDepth> gAction(gauge);
-        PREC plaq;
-        plaq = gAction.plaquette();
-        rootLogger.info("plaquette: " ,  plaq);
-
+        
+        if ( lp.action() == "HISQ" )
         {
-            measureHadrons<PREC, USE_GPU, HaloDepth, HaloDepthSpin, Even, NStacks, R18> mesons(commBase, lp, gauge);
-            mesons.compute_HISQ_correlators();
+            Gaugefield<PREC, USE_GPU, HaloDepth , compHISQ> gauge(commBase);
+            if (lp.use_unit_conf()){
+                rootLogger.info("Using unit configuration for tests/benchmarks");
+                gauge.one();
+            } else {
+                rootLogger.info("Read configuration");
+                gauge.readconf_nersc(lp.GaugefileName());
+            }
+            gauge.updateAll();
+    
+            //! Check plaquette
+            GaugeAction<PREC, USE_GPU, HaloDepth , compHISQ > gAction(gauge);
+            PREC plaq;
+            plaq = gAction.plaquette();
+            rootLogger.info( "plaquette: " ,  plaq ) ;
+
+        
+            measureHadrons<PREC, USE_GPU, HaloDepth, HaloDepthSpin, Even, NStacks, compHISQ, compstdStag> mesons(commBase, lp );
+            mesons.compute_HISQ_correlators( gauge) ;
             mesons.write_correlators_to_file();
+        }
+        else if ( lp.action() == "stdStag" )
+        {
+            Gaugefield<PREC, USE_GPU, HaloDepth , compstdStag> gauge(commBase);
+            if (lp.use_unit_conf()){
+                rootLogger.info( "Using unit configuration for tests/benchmarks" );
+                gauge.one();
+            } else {
+                rootLogger.info( "Read configuration" );
+                gauge.readconf_nersc(lp.GaugefileName());
+            }
+            gauge.updateAll();
+
+            //! Check plaquette
+            GaugeAction<PREC, USE_GPU, HaloDepth , compstdStag > gAction(gauge);
+            PREC plaq;
+            plaq = gAction.plaquette();
+            rootLogger.info("plaquette: " ,  plaq);
+
+        
+            measureHadrons<PREC, USE_GPU, HaloDepth, HaloDepthSpin, Even, NStacks, compHISQ, compstdStag> mesons(commBase, lp );
+            mesons.compute_stdStag_correlators( gauge) ;
+            mesons.write_correlators_to_file();
+        }
+        else{
+            throw std::runtime_error(stdLogger.fatal("Unknown action! Choose one from {HISQ , stdStag}."));
         }
 
         //!Additional features we want to have:
@@ -68,4 +98,3 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
-
