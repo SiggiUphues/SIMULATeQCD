@@ -40,7 +40,7 @@ struct measureHadronsParam : LatticeParameters {
     Parameter<std::string> source_type; //FIXME this feature isn't implemented yet
 
     DynamicParameter<std::string> correlator_axes;
-    DynamicParameter<int> abs_momenta_per_correlator_axis;
+    DynamicParameter<int> upper_momenta_per_correlator_axis;
     Parameter<std::string> measurements_dir;
     DynamicParameter<floatT> masses;
     DynamicParameter<std::string> mass_labels;
@@ -66,7 +66,7 @@ struct measureHadronsParam : LatticeParameters {
         add(source_type, "source_type");
         add(source_coords, "source_coords");
         add(correlator_axes, "correlator_axes");
-        add(abs_momenta_per_correlator_axis, "abs_momenta_per_correlator_axis");
+        add(upper_momenta_per_correlator_axis, "upper_momenta_per_correlator_axis");
 
         addDefault(cg_residue, "cg_residue", static_cast<floatT>(1e-6));
         addDefault(cg_max_iter, "cg_max_iter", static_cast<int>(10000));
@@ -126,7 +126,7 @@ private:
     const size_t _n_masses;
     const size_t _n_channels = 8;
     const size_t _n_correlator_axes;
-    const size_t _n_abs_momenta_per_axis;
+    const size_t _n_upper_momenta_per_axis;
     size_t _n_correlator_elements ;
     size_t _n_momenta_elements ;
     const source_type _src_type; //FIXME support for different sources
@@ -174,7 +174,7 @@ public:
             _lp(lp),
             _n_masses(_lp.masses.get().size()),
             _n_correlator_axes(_lp.correlator_axes.get().size()),
-            _n_abs_momenta_per_axis(_lp.abs_momenta_per_correlator_axis.get().size()),
+            _n_upper_momenta_per_axis(_lp.upper_momenta_per_correlator_axis.get().size()),
             _src_type(source_type_map[_lp.source_type()]),
             _act_type(action_type_map[_lp.action()]),
             _use_individual_naik_epsilons(lp.naik_epsilons_individual.isSet()),
@@ -231,9 +231,9 @@ public:
             }
             
             _corr_ls[i] = _lat_extents[_axes_indices[ i * 4 ]] ;
-            _momentum_elements_per_axis[i] = ( _lp.abs_momenta_per_correlator_axis.get()[i] + 1 )
-                                        * ( _lp.abs_momenta_per_correlator_axis.get()[i] + 1 )
-                                        * ( _lp.abs_momenta_per_correlator_axis.get()[i] + 1 ) ;
+            _momentum_elements_per_axis[i] = ( _lp.upper_momenta_per_correlator_axis.get()[i] + 1 )
+                                        * ( _lp.upper_momenta_per_correlator_axis.get()[i] + 1 )
+                                        * ( _lp.upper_momenta_per_correlator_axis.get()[i] + 1 ) ;
             _n_momenta_elements    +=  3 * _momentum_elements_per_axis[i] ;
             _n_correlator_elements += _n_masses 
                                     * _n_masses 
@@ -272,14 +272,14 @@ public:
         //! set up momenta vector
         _momenta.resize(_n_momenta_elements);
         std::fill(_momenta.begin(), _momenta.end(), 0);
-        for (size_t i = 0; i < _n_abs_momenta_per_axis ; i++)
+        for (size_t i = 0; i < _n_upper_momenta_per_axis ; i++)
         {
             size_t momentum_index = 0 ;
-            for (size_t k1 = 0; k1 <= _lp.abs_momenta_per_correlator_axis.get()[i] ; k1++)
+            for (size_t k1 = 0; k1 <= _lp.upper_momenta_per_correlator_axis.get()[i] ; k1++)
             {
-                for (size_t k2 = 0; k2 <= _lp.abs_momenta_per_correlator_axis.get()[i] ; k2++)
+                for (size_t k2 = 0; k2 <= _lp.upper_momenta_per_correlator_axis.get()[i] ; k2++)
                 {
-                    for (size_t k3 = 0; k3 <= _lp.abs_momenta_per_correlator_axis.get()[i] ; k3++)
+                    for (size_t k3 = 0; k3 <= _lp.upper_momenta_per_correlator_axis.get()[i] ; k3++)
                     {
                     
                     
