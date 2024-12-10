@@ -17,6 +17,22 @@
 #define PREC double
 #endif
 
+template< class GaugeField >
+void readConfFormat( GaugeField & gauge , measureHadronsParam<PREC>& lp ){
+    if ( lp.format() == "nersc" ){
+        gauge.readconf_nersc( lp.GaugefileName() );
+    }
+    else if ( lp.format() == "milc" ){
+        gauge.readconf_milc( lp.GaugefileName() );
+    }
+    else if ( lp.format() == "ildg" ){
+        gauge.readconf_ildg( lp.GaugefileName() );
+    }
+    else {
+        throw std::runtime_error(stdLogger.fatal("Unknown conf format use one of {nersc , milc , ildg }."));
+    }
+
+}
 int main(int argc, char *argv[]) {
     try {
         stdLogger.setVerbosity(TRACE);
@@ -43,7 +59,8 @@ int main(int argc, char *argv[]) {
                 gauge.one();
             } else {
                 rootLogger.info("Read configuration");
-                gauge.readconf_nersc(lp.GaugefileName());
+                //gauge.readconf_nersc(lp.GaugefileName());
+                readConfFormat< Gaugefield<PREC, USE_GPU, HaloDepth , compHISQ> >( gauge , lp );
             }
             gauge.updateAll();
     
@@ -66,7 +83,9 @@ int main(int argc, char *argv[]) {
                 gauge.one();
             } else {
                 rootLogger.info( "Read configuration" );
-                gauge.readconf_nersc(lp.GaugefileName());
+                //gauge.readconf_nersc(lp.GaugefileName());
+                readConfFormat< Gaugefield<PREC, USE_GPU, HaloDepth , compstdStag> >( gauge , lp );
+
             }
             gauge.updateAll();
 
